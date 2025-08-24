@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Runtime.InteropServices;
 using System.Threading;
 
@@ -37,9 +37,33 @@ namespace FreezeLagCMD
 
         const int HOTKEY_ID_F5 = 1;
         const int HOTKEY_ID_ESC = 2;
+         private static api KeyAuthApp = new api(
+         name: "",
+         ownerid: "",
+         secret: "",
+         version: ""
+         );
 
         static void Main()
         {
+            Console.Title = "YOUR NAME";
+
+            KeyAuthApp.init();
+
+            Console.WriteLine("==Login==");
+            Console.Write("Username: ");
+            string user = Console.ReadLine();
+            Console.Write("Password: ");
+            string pass = Console.ReadLine();
+
+            KeyAuthApp.login(user, pass);
+            if (!KeyAuthApp.response.success)
+            {
+                Console.WriteLine("Login Failed: " + KeyAuthApp.response.message);
+                Console.ReadKey();
+                return;
+            }
+
             Console.WriteLine("Welcome to Magıc Cheats Fake Lag Panel.");
             Console.WriteLine("Developing by luciviq3439 ...");
             Console.WriteLine("F5 = ON/OFF | ESC = CLOSE");
