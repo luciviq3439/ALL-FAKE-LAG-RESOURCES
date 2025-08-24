@@ -1,14 +1,11 @@
-using System;
+﻿using System;
 using System.Runtime.InteropServices;
 using System.Threading;
-using YourNamespace;
 
 namespace FreezeLagCMD
 {
-    internal class Program
+    class Program
     {
-      
-
         // WinDivert DLL importları
         [DllImport("WinDivert.dll", CallingConvention = CallingConvention.Cdecl)]
         public static extern IntPtr WinDivertOpen(string filter, int layer, short priority, ulong flags);
@@ -17,8 +14,6 @@ namespace FreezeLagCMD
         public static extern bool WinDivertRecv(IntPtr handle, byte[] packet, uint packetLen, ref uint readLen, ref WINDIVERT_ADDRESS addr);
 
         [DllImport("WinDivert.dll", CallingConvention = CallingConvention.Cdecl)]
-
-      
         public static extern bool WinDivertClose(IntPtr handle);
 
         [StructLayout(LayoutKind.Sequential)]
@@ -27,107 +22,124 @@ namespace FreezeLagCMD
             [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
             public byte[] Reserved;
         }
+
+        // Hotkey register
         [DllImport("user32.dll")]
+        public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
 
-        static extern short GetAsyncKeyState(int vKey);
+        [DllImport("user32.dll")]
+        public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
 
-        private static bool freezeEnabled = false;
-        private static bool ghostEnabled = false;
-        private static bool running = true;
+        private static bool freezeActive = false;
+        private static IntPtr handle;
+        private static Thread freezeThread;
+        private static CancellationTokenSource cts;
 
-        // KeyAuth bilgileri
-        private static api KeyAuthApp = new api(
-            name: "",
-            ownerid: "",
-            secret: "",
-            version: ""
-        );
+        const int HOTKEY_ID_F5 = 1;
+        const int HOTKEY_ID_ESC = 2;
 
-        static void Main(string[] args)
+        static void Main()
         {
-            Console.Title = "YOUR NAME";
+            Console.WriteLine("Welcome to Magıc Cheats Fake Lag Panel.");
+            Console.WriteLine("Developing by luciviq3439 ...");
+            Console.WriteLine("F5 = ON/OFF | ESC = CLOSE");
 
-            KeyAuthApp.init();
+            // Register hotkeys
+            RegisterHotKey(IntPtr.Zero, HOTKEY_ID_F5, 0, (uint)ConsoleKey.F5);       // F tuşu
+            RegisterHotKey(IntPtr.Zero, HOTKEY_ID_ESC, 0, (uint)ConsoleKey.Escape); // ESC tuşu
 
-            Console.WriteLine("==Login==");
-            Console.Write("Username: ");
-            string user = Console.ReadLine();
-            Console.Write("Password: ");
-            string pass = Console.ReadLine();
-
-            KeyAuthApp.login(user, pass);
-            if (!KeyAuthApp.response.success)
+            // Hotkey mesajlarını dinle
+            MSG msg;
+            while (GetMessage(out msg, IntPtr.Zero, 0, 0))
             {
-                Console.WriteLine("Login Failed: " + KeyAuthApp.response.message);
-                Console.ReadKey();
+                if (msg.message == WM_HOTKEY)
+                {
+                    int id = msg.wParam.ToInt32();
+                    if (id == HOTKEY_ID_F5)
+                    {
+                        if (!freezeActive)
+                        {
+                            StartFreeze();
+                            Console.WriteLine("FreezeLag ON.");
+                            freezeActive = true;
+                        }
+                        else
+                        {
+                            StopFreeze();
+                            Console.WriteLine("FreezeLag OFF.");
+                            freezeActive = false;
+                        }
+                    }
+                    else if (id == HOTKEY_ID_ESC)
+                    {
+                        Console.WriteLine("Closing ...");
+                        if (freezeActive) StopFreeze();
+                        break;
+                    }
+                }
+            }
+
+            // Temizlik
+            UnregisterHotKey(IntPtr.Zero, HOTKEY_ID_F5);
+            UnregisterHotKey(IntPtr.Zero, HOTKEY_ID_ESC);
+        }
+
+        static void StartFreeze()
+        {
+            cts = new CancellationTokenSource();
+            freezeThread = new Thread(() => FreezeLoop(cts.Token));
+            freezeThread.IsBackground = true;
+            freezeThread.Start();
+        }
+
+        static void StopFreeze()
+        {
+            if (cts != null)
+                cts.Cancel();
+
+            if (handle != IntPtr.Zero)
+            {
+                WinDivertClose(handle);
+                handle = IntPtr.Zero;
+            }
+        }
+
+        static void FreezeLoop(CancellationToken token)
+        {
+            handle = WinDivertOpen("inbound and udp.PayloadLength >= 48", 0, 0, 0);
+            if (handle == IntPtr.Zero)
+            {
+                Console.WriteLine("WinDivert açılamadı!");
                 return;
             }
 
-            Console.WriteLine("✅ Login Successful!\n");
+            byte[] packet = new byte[65535];
+            uint readLen = 0;
+            WINDIVERT_ADDRESS addr = new WINDIVERT_ADDRESS { Reserved = new byte[16] };
 
-            // Kullanıcıdan tuş seçimi
-            Console.WriteLine("Select FreezeLag Key:");
-            ConsoleKey freezeKey = Console.ReadKey(true).Key;
-            Console.WriteLine($"FreezeLag Key: {freezeKey}\n");
-
-            Console.WriteLine("Select GhostHack Key:");
-            ConsoleKey ghostKey = Console.ReadKey(true).Key;
-            Console.WriteLine($"GhostHack Key: {ghostKey}\n");
-
-            // Threadleri başlat
-            Thread freezeThread = new Thread(() => FeatureLoop(freezeKey, ref freezeEnabled, LagManager.StartFreeze, LagManager.StopFreeze, "FreezeLag"));
-            Thread ghostThread = new Thread(() => FeatureLoop(ghostKey, ref ghostEnabled, LagManager.StartGhostLag, LagManager.StopGhostLag, "GhostHack"));
-
-            freezeThread.IsBackground = true;
-            ghostThread.IsBackground = true;
-
-            freezeThread.Start();
-            ghostThread.Start();
-
-            // Ana döngü: ESC ile çıkış
-            while (true)
+            while (!token.IsCancellationRequested)
             {
-                if (Console.KeyAvailable && Console.ReadKey(true).Key == ConsoleKey.Escape)
-                {
-                    running = false;
-                    Console.WriteLine("Exiting...");
-                    Environment.Exit(0);
-                }
-
-                Thread.Sleep(50);
+                WinDivertRecv(handle, packet, (uint)packet.Length, ref readLen, ref addr);
+                // Paketler burada tutuluyor → lag etkisi
             }
         }
 
-        // Genel toggle fonksiyonu
-        private static void FeatureLoop(ConsoleKey key, ref bool featureEnabled, Action startAction, Action stopAction, string featureName)
+        // WinAPI mesaj yapısı
+        private const int WM_HOTKEY = 0x0312;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MSG
         {
-            Console.WriteLine($"{featureName} Ready...");
-
-            // Thread başlarken tuşun mevcut durumunu kaydet
-            bool lastKeyState = (GetAsyncKeyState((int)key) & 0x8000) != 0;
-
-            while (running)
-            {
-                bool isPressed = (GetAsyncKeyState((int)key) & 0x8000) != 0;
-
-                if (isPressed && !lastKeyState) // Tuşa yeni basıldıysa toggle
-                {
-                    featureEnabled = !featureEnabled;
-                    if (featureEnabled)
-                    {
-                        startAction();
-                        Console.WriteLine($"{featureName} ON.");
-                    }
-                    else
-                    {
-                        stopAction();
-                        Console.WriteLine($"{featureName} OFF.");
-                    }
-                }
-
-                lastKeyState = isPressed;
-                Thread.Sleep(50);
-            }
+            public IntPtr hwnd;
+            public uint message;
+            public IntPtr wParam;
+            public IntPtr lParam;
+            public uint time;
+            public int pt_x;
+            public int pt_y;
         }
+
+        [DllImport("user32.dll")]
+        private static extern bool GetMessage(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
     }
 }
